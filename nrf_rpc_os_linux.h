@@ -32,5 +32,6 @@ static int nrf_rpc_os_sem_init(nrf_rpc_os_sem_t *sem, int init_count){}
 static void nrf_rpc_os_sem_take(nrf_rpc_os_sem_t *sem){}
 static void nrf_rpc_os_sem_give(nrf_rpc_os_sem_t *sem){}
 
+extern int _nrf_rpc_log_level;
 
 #endif // SHMEM_LINUX_H_

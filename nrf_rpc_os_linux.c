@@ -25,7 +25,7 @@
 #include <errno.h>
 
 #include "conf.h"
-#include "shmem_linux.h"
+#include "nrf_rpc_os_linux.h"
 
 #define SHARED_MEMORY_SIZE (NRF_RPC_SHMEM_OUT_SIZE + NRF_RPC_SHMEM_IN_SIZE + sizeof(struct ipc_events))
 
@@ -104,11 +104,66 @@ static void listen_and_wait(uint8_t this_value)
 
 static const char *shmem_name = "/shmem_test_shmdesc";
 
+int _nrf_rpc_log_level = 4;
+
 int nrf_rpc_os_init()
 {
 	struct ipc_events *ipc_events;
 	int fd;
 	char* env;
+	char log_level;
+
+	env = getenv("NRF_RPC_LOG_LEVEL");
+	log_level = (env == NULL) ? 'N' : env[0];
+	switch (log_level)
+	{
+	case 'D':
+	case 'd':
+		_nrf_rpc_log_level = 4;
+		break;
+	case 'I':
+	case 'i':
+		_nrf_rpc_log_level = 3;
+		break;
+	case 'W':
+	case 'w':
+		_nrf_rpc_log_level = 2;
+		break;
+	case 'E':
+	case 'e':
+		_nrf_rpc_log_level = 1;
+		break;
+	case 'n':
+	case 'N':
+		_nrf_rpc_log_level = 0;
+		break;
+	case '4':
+	case '3':
+	case '2':
+	case '1':
+	case '0':
+		_nrf_rpc_log_level = log_level - '0';
+		if (env[1] == 0) {
+			break;
+		}
+		/* Fall to default (error) case */
+	default:
+		_nrf_rpc_log_level = 1;
+		NRF_RPC_ERR("Invalid log level");
+		exit(1);
+	}
+
+	if (env == NULL || strcmp(env, "0") || env[0] == 'N' || env[0] == 'n') {
+		_nrf_rpc_log_level = 0;
+	} else if (strcmp(env, "1") == 0 || strcmp(env, "ERR") == 0) {
+		_nrf_rpc_log_level = 1;
+	} else if (strcmp(env, "2") == 0 || strcmp(env, "WRN") == 0) {
+		_nrf_rpc_log_level = 2;
+	} else if (strcmp(env, "3") == 0 || strcmp(env, "INF") == 0) {
+		_nrf_rpc_log_level = 3;
+	} else if (strcmp(env, "4") == 0 || strcmp(env, "DBG") == 0) {
+		_nrf_rpc_log_level = 4;
+	}
 
 	env = getenv("NRF_RPC_SHMEM_NAME");
 	if (env != NULL) {

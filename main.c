@@ -23,7 +23,7 @@
 #include <pthread.h>
 
 #include "conf.h"
-#include "shmem_linux.h"
+#include "nrf_rpc_os.h"
 
 
 
