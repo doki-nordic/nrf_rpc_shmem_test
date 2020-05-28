@@ -1,0 +1,4 @@
+[submodule "nrfxlib"]
+	path = nrfxlib
+	url = https://github.com/doki-nordic/nrfxlib.git
+	branch = nrf_rpc
