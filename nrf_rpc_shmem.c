@@ -1,108 +1,284 @@
+#define NRF_RPC_LOG_MODULE NRF_RPC_TR
+#include <nrf_rpc_log.h>
+
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 
-#include "conf.h"
 #include "nrf_rpc_os.h"
 #include "nrf_rpc_shmem.h"
+#include "nrf_rpc_common.h"
 
-#if 0
+
+#define FLAG_RELEASE 0x80
 
 #define WORD_SIZE sizeof(uint32_t)
+#define WORD_BITS (8 * sizeof(uint32_t))
 
-#if 0
+#if defined(CONFIG_NRF_RPC_SHMEM_NUM_BLOCKS_32)
 typedef uint32_t mask_t;
+typedef int32_t smask_t;
 #define NUM_BLOCKS 32
-#else
+#define mask_clz nrf_rpc_os_clz32
+#elif defined(CONFIG_NRF_RPC_SHMEM_NUM_BLOCKS_64)
 typedef uint64_t mask_t;
+typedef int64_t smask_t;
 #define NUM_BLOCKS 64
+#define mask_clz nrf_rpc_os_clz64
+#else
+#error Number of shared dynamic memory blocks is not configured.
 #endif
-
-#define SLOT_STATE_MAX         0xFFFFFFF0uL
-#define SLOT_HANDSHAKE_INIT    0xFFFFFFF1uL
-#define SLOT_HANDSHAKE_CONFIRM 0xFFFFFFF2uL
-#define SLOT_EMPTY             0xFFFFFFFFuL
-#define SLOT_PENDING           0xFFFFFFFEuL
 
 #define ALLOCABLE_MULTIPLY (WORD_SIZE * NUM_BLOCKS)
 
-#define OUT_SIZE_TOTAL NRF_RPC_SHMEM_OUT_SIZE
-#define OUT_SIZE_SLOTS (WORD_SIZE * NRF_RPC_OUT_ENDPOINTS)
-#define OUT_MIN_SIZE_QUEUE (2 * WORD_SIZE + (NRF_RPC_OUT_ENDPOINTS + NRF_RPC_IN_ENDPOINTS + 1))
-#define OUT_SIZE_ALLOCABLE (((OUT_SIZE_TOTAL - OUT_SIZE_SLOTS - OUT_MIN_SIZE_QUEUE) / ALLOCABLE_MULTIPLY) * ALLOCABLE_MULTIPLY)
-#define OUT_SIZE_QUEUE (OUT_SIZE_TOTAL - OUT_SIZE_ALLOCABLE - OUT_SIZE_SLOTS)
-#define OUT_QUEUE_ITEMS (OUT_SIZE_QUEUE - 2 * WORD_SIZE)
+#define OUT_TOTAL_SIZE CONFIG_NRF_RPC_SHMEM_OUT_SIZE
+#define OUT_ALLOCABLE_SIZE (((OUT_TOTAL_SIZE - (3 * WORD_SIZE + 2 * NUM_BLOCKS + 1)) / ALLOCABLE_MULTIPLY) * ALLOCABLE_MULTIPLY)
+#define OUT_QUEUE_SIZE (OUT_TOTAL_SIZE - OUT_ALLOCABLE_SIZE - 1)
+#define OUT_QUEUE_ITEMS (OUT_QUEUE_SIZE - 2 * WORD_SIZE)
+#define OUT_BLOCK_SIZE (OUT_ALLOCABLE_SIZE / NUM_BLOCKS)
 
-#define OUT_BLOCK_SIZE (OUT_SIZE_ALLOCABLE / NUM_BLOCKS)
+#define IN_TOTAL_SIZE CONFIG_NRF_RPC_SHMEM_IN_SIZE
+#define IN_ALLOCABLE_SIZE (((IN_TOTAL_SIZE - (3 * WORD_SIZE + 2 * NUM_BLOCKS + 1)) / ALLOCABLE_MULTIPLY) * ALLOCABLE_MULTIPLY)
+#define IN_QUEUE_SIZE (IN_TOTAL_SIZE - IN_ALLOCABLE_SIZE - 1)
+#define IN_QUEUE_ITEMS (IN_QUEUE_SIZE - 2 * WORD_SIZE)
+#define IN_BLOCK_SIZE (IN_ALLOCABLE_SIZE / NUM_BLOCKS)
 
-#define IN_SIZE_TOTAL NRF_RPC_SHMEM_IN_SIZE
-#define IN_SIZE_SLOTS (WORD_SIZE * NRF_RPC_IN_ENDPOINTS)
-#define IN_MIN_SIZE_QUEUE (2 * WORD_SIZE + (NRF_RPC_IN_ENDPOINTS + NRF_RPC_IN_ENDPOINTS + 1))
-#define IN_SIZE_ALLOCABLE (((IN_SIZE_TOTAL - IN_SIZE_SLOTS - IN_MIN_SIZE_QUEUE) / ALLOCABLE_MULTIPLY) * ALLOCABLE_MULTIPLY)
-#define IN_SIZE_QUEUE (IN_SIZE_TOTAL - IN_SIZE_ALLOCABLE - IN_SIZE_SLOTS)
-#define IN_QUEUE_ITEMS (IN_SIZE_QUEUE - 2 * WORD_SIZE)
-
-#define IN_BLOCK_SIZE (IN_SIZE_ALLOCABLE / NUM_BLOCKS)
+#define QUEUE_INDEX_MASK (NUM_BLOCKS - 1)
 
 #if NRF_RPC_OS_SHMEM_PTR_CONST
 
 static uint8_t *const out_allocable = (uint8_t *)nrf_rpc_os_out_shmem_ptr;
-static uint32_t *const out_slots = (uint32_t *)&out_allocable[OUT_SIZE_ALLOCABLE];
-static uint32_t *const out_queue_tx = (uint32_t *)&out_allocable[OUT_SIZE_ALLOCABLE + OUT_SIZE_SLOTS];
-static uint32_t *const out_queue_rx = (uint32_t *)&out_allocable[OUT_SIZE_ALLOCABLE + OUT_SIZE_SLOTS + WORD_SIZE];
-static uint8_t *const out_queue = (uint8_t *)&out_allocable[OUT_SIZE_ALLOCABLE + OUT_SIZE_SLOTS + 2 * WORD_SIZE];
+static uint32_t *const out_queue_tx = (uint32_t *)&out_allocable[OUT_ALLOCABLE_SIZE];
+static uint32_t *const out_queue_rx = (uint32_t *)&out_allocable[OUT_ALLOCABLE_SIZE + WORD_SIZE];
+static uint8_t *const out_queue = (uint8_t *)&out_allocable[OUT_ALLOCABLE_SIZE + 2 * WORD_SIZE];
+static uint8_t *const out_handshake = (uint8_t *)&out_allocable[OUT_TOTAL_SIZE - 1];
 
 static uint8_t *const in_allocable = (uint8_t *)nrf_rpc_os_in_shmem_ptr;
-static uint32_t *const in_slots = (uint32_t *)&in_allocable[IN_SIZE_ALLOCABLE];
-static uint32_t *const in_queue_tx = (uint32_t *)&in_allocable[IN_SIZE_ALLOCABLE + IN_SIZE_SLOTS];
-static uint32_t *const in_queue_rx = (uint32_t *)&in_allocable[IN_SIZE_ALLOCABLE + IN_SIZE_SLOTS + WORD_SIZE];
-static uint8_t *const in_queue = (uint8_t *)&in_allocable[IN_SIZE_ALLOCABLE + IN_SIZE_SLOTS + 2 * WORD_SIZE];
+static uint32_t *const in_queue_tx = (uint32_t *)&in_allocable[IN_ALLOCABLE_SIZE];
+static uint32_t *const in_queue_rx = (uint32_t *)&in_allocable[IN_ALLOCABLE_SIZE + WORD_SIZE];
+static uint8_t *const in_queue = (uint8_t *)&in_allocable[IN_ALLOCABLE_SIZE + 2 * WORD_SIZE];
+static uint8_t *const in_handshake = (uint8_t *)&in_allocable[IN_TOTAL_SIZE - 1];
 
 #else
 
-static uint8_t *out_allocable;
-static uint32_t *out_slots;
-static uint32_t *out_queue_tx;
-static uint32_t *out_queue_rx;
-static uint8_t *out_queue;
+static uint8_t * out_allocable;
+static uint32_t * out_queue_tx;
+static uint32_t * out_queue_rx;
+static uint8_t * out_queue;
+static uint8_t * out_handshake;
 
-static uint8_t *in_allocable;
-static uint32_t *in_slots;
-static uint32_t *in_queue_tx;
-static uint32_t *in_queue_rx;
-static uint8_t *in_queue;
+static uint8_t * in_allocable;
+static uint32_t * in_queue_tx;
+static uint32_t * in_queue_rx;
+static uint8_t * in_queue;
+static uint8_t * in_handshake;
 
 #endif
 
-static nrf_rpc_os_mutex_t out_mutex;
 static nrf_rpc_os_sem_t out_sem;
-static mask_t free_mask = ~(mask_t)0;
-static mask_t endpoint_mask[NRF_RPC_OUT_ENDPOINTS];
+static nrf_rpc_os_mutex_t out_mutex;
 
+static nrf_rpc_os_atomic_t free_mask[NUM_BLOCKS / WORD_BITS]; // TODO: initialize
 
-int signal_with_data(uint8_t data)
+static nrf_rpc_tr_receive_handler_t receive_handler;
+
+static inline void free_mask_set(mask_t mask)
 {
-	uint32_t tx = *out_queue_tx;
-	uint32_t rx = *out_queue_rx;
-	uint32_t dst = tx;
+	nrf_rpc_os_atomic_or(&free_mask[0], mask);
+	if (NUM_BLOCKS > 32) {
+		nrf_rpc_os_atomic_or(&free_mask[1], mask >> 32);
+	}
+	NRF_RPC_OS_MEMORY_BARIER();
+}
+
+static inline void free_mask_unset(mask_t mask)
+{
+	mask = ~mask;
+	nrf_rpc_os_atomic_and(&free_mask[0], mask);
+	if (NUM_BLOCKS > 32) {
+		nrf_rpc_os_atomic_and(&free_mask[1], mask >> 32);
+	}
+	NRF_RPC_OS_MEMORY_BARIER();
+}
+
+static inline mask_t free_mask_get()
+{
+	mask_t mask;
+
+	mask = nrf_rpc_os_atomic_get(&free_mask[0]);
+	if (NUM_BLOCKS > 32) {
+		mask = (mask_t)nrf_rpc_os_atomic_get(&free_mask[1]) << 32;
+	}
+
+	return mask;
+}
+
+static inline void free_mask_init()
+{
+	free_mask_set(~(mask_t)0);
+}
+
+static mask_t calc_mask(size_t blocks, size_t index)
+{
+	mask_t mask = (mask_t)1 << (NUM_BLOCKS - 1); // 100000000...
+	mask = (smask_t)mask >> (blocks - 1);        // 111000000... (e.g. blocks = 3)
+	mask = mask >> index;                        // 000011100... (e.g. index = 4)
+	return mask;
+}
+
+void nrf_rpc_tr_alloc_tx_buf(uint8_t **buf, size_t len)
+{
+	size_t i;
+	/* Actual allocated memory: | 32-bit size | data | padding | */
+	size_t blocks = (len + (WORD_SIZE + OUT_BLOCK_SIZE - 1)) / OUT_BLOCK_SIZE;
+	bool sem_taken = false;
+	mask_t cur_mask;
+	mask_t sh_mask;
+
+	if (blocks > NUM_BLOCKS || blocks == 0) {
+		NRF_RPC_ERR("Requested %d bytes, maximum is %d", len, OUT_ALLOCABLE_SIZE - sizeof(uint32_t));
+		NRF_RPC_ASSERT(0);
+		nrf_rpc_os_fatal();
+		*buf = NULL;
+		return;
+	}
+
+	nrf_rpc_os_lock(&out_mutex);
+
+	do {
+		// create shifted mask with bits set where `blocks` can be allocated
+		cur_mask = free_mask_get();
+		sh_mask = cur_mask;
+		for (i = 1; i < blocks; i++) {
+			sh_mask &= (sh_mask << 1);
+		}
+
+		// if no memory
+		if (sh_mask == 0) {
+			// wait for any block to be empty
+			nrf_rpc_os_unlock(&out_mutex);
+			nrf_rpc_os_take(&out_sem);
+			sem_taken = true;
+			nrf_rpc_os_lock(&out_mutex);
+		}
+
+	} while (sh_mask == 0);
+
+	// get first available blocks
+	size_t free_index = mask_clz(sh_mask);
+	// create bit mask with blocks that will be used
+	mask_t mask = calc_mask(blocks, free_index);
+	// update masks
+	free_mask_unset(mask);
+
+	nrf_rpc_os_unlock(&out_mutex);
+	
+	// Give semaphore back, because there may be some other thread waiting
+	if (sem_taken && (cur_mask & ~mask) != 0) {
+		nrf_rpc_os_give(&out_sem);
+	}
+
+	uint32_t *mem_start = (uint32_t *)&out_allocable[OUT_BLOCK_SIZE * free_index];
+
+	mem_start[0] = blocks * OUT_BLOCK_SIZE;
+
+	*buf = (uint8_t *)(&mem_start[1]);
+}
+
+void nrf_rpc_tr_free_tx_buf(uint8_t *buf)
+{
+	int err;
+	uint32_t *mem_start = (uint32_t *)buf - 1;
+	uint32_t offset = (uint8_t *)mem_start - out_allocable;
+	uint32_t block_index = offset / OUT_BLOCK_SIZE;
+	uint32_t allocated_size;
+	uint32_t allocated_blocks;
+
+	NRF_RPC_ASSERT(block_index < NUM_BLOCKS);
+	NRF_RPC_ASSERT(buf == &out_allocable[block_index * OUT_BLOCK_SIZE]);
+
+	allocated_size = mem_start[0];
+	allocated_blocks = allocated_size / OUT_BLOCK_SIZE;
+
+	NRF_RPC_ASSERT(allocated_blocks % OUT_BLOCK_SIZE == 0);
+	NRF_RPC_ASSERT(allocated_size <= OUT_ALLOCABLE_SIZE);
+	NRF_RPC_ASSERT(offset + allocated_size <= OUT_ALLOCABLE_SIZE);
+
+	free_mask_set(calc_mask(allocated_blocks, block_index));
+	nrf_rpc_os_give(&out_sem);
+}
+
+
+#define memory_corrupted_error() \
+	NRF_RPC_ERR("Shared memory corrupted"); \
+	NRF_RPC_ASSERT(0); \
+	nrf_rpc_os_fatal();
+
+
+static void queue_send(uint8_t data)
+{
+	uint32_t tx;
+	uint32_t dst;
+
+	tx = *out_queue_tx;
+	dst = tx;
+
+	if (dst >= OUT_QUEUE_ITEMS) {
+		memory_corrupted_error();
+		return;
+	}
 
 	tx++;
 	if (tx >= OUT_QUEUE_ITEMS) {
 		tx = 0;
 	}
 
-	if (tx == rx || dst >= OUT_QUEUE_ITEMS) {
-		return NRF_RPC_ERR_NO_MEM;
-	}
-
 	out_queue[dst] = data;
 	NRF_RPC_OS_MEMORY_BARIER();
 	*out_queue_tx = tx;
 
-	return nrf_rpc_os_signal();
+	nrf_rpc_os_signal();
 }
 
 
-int signal_data_get()
+int nrf_rpc_tr_send(uint8_t *buf, size_t len)
+{
+	int err;
+	uint32_t *mem_start = (uint32_t *)buf - 1;
+	uint32_t offset = (uint8_t *)mem_start - out_allocable;
+	uint32_t block_index = offset / OUT_BLOCK_SIZE;
+	uint32_t allocated_size;
+	uint32_t allocated_blocks;
+	uint32_t blocks = (len + OUT_BLOCK_SIZE - 1) / OUT_BLOCK_SIZE;
+	uint32_t total_len = len + WORD_SIZE;
+
+	NRF_RPC_ASSERT(block_index < NUM_BLOCKS);
+	NRF_RPC_ASSERT((uint8_t *)mem_start == &out_allocable[block_index * OUT_BLOCK_SIZE]);
+
+	allocated_size = mem_start[0];
+	allocated_blocks = allocated_size / OUT_BLOCK_SIZE;
+
+	NRF_RPC_ASSERT(allocated_size % OUT_BLOCK_SIZE == 0);
+	NRF_RPC_ASSERT(allocated_size <= OUT_ALLOCABLE_SIZE);
+	NRF_RPC_ASSERT(offset + allocated_size <= OUT_ALLOCABLE_SIZE);
+	NRF_RPC_ASSERT(total_len <= allocated_size);
+
+	if (blocks < allocated_blocks) {
+		free_mask_set(calc_mask(allocated_blocks - blocks, block_index + blocks));
+		nrf_rpc_os_give(&out_sem);
+	}
+
+	mem_start[0] = total_len;
+
+	nrf_rpc_os_lock(&out_mutex);
+	queue_send(block_index);
+	nrf_rpc_os_unlock(&out_mutex);
+
+	return 0;
+}
+
+
+static int queue_recv()
 {
 	uint32_t tx = *in_queue_tx;
 	uint32_t rx = *in_queue_rx;
@@ -111,8 +287,13 @@ int signal_data_get()
 	tx = *in_queue_tx;
 	rx = *in_queue_rx;
 
-	if (tx == rx || rx >= IN_QUEUE_ITEMS) {
-		return NRF_RPC_ERR_EMPTY;
+	if (rx >= IN_QUEUE_ITEMS) {
+		memory_corrupted_error();
+		return -1;
+	}
+
+	if (tx == rx) {
+		return -1;
 	}
 
 	NRF_RPC_OS_MEMORY_BARIER();
@@ -129,134 +310,259 @@ int signal_data_get()
 	return data;
 }
 
-uint8_t *out_shmem_alloc(uint32_t addr, size_t size)
+
+static void signal_received(void)
 {
-	size_t i;
-	size_t blocks = (size + (4 + OUT_BLOCK_SIZE - 1)) / OUT_BLOCK_SIZE;
-	bool sem_taken = false;
-	mask_t sh_mask;
-
-	if (blocks == 0 || blocks > NUM_BLOCKS) {
-		return NULL;
-	}
-
-	/* if this slot was not consumed yet wait for it */
-	while (out_slots[addr] <= SLOT_STATE_MAX) {
-		nrf_rpc_os_sem_take(&out_sem);
-		sem_taken = true;
-	}
-
-	//k_mutex_lock(&out_mutex, K_FOREVER); // Maybe lock scheduler?
-
-	// if this slot is empty or pending reclaim its memory
-	free_mask ^= endpoint_mask[addr];
-	endpoint_mask[addr] = 0;
+	int block;
+	int release;
+	uint32_t *mem_start;
+	uint32_t total_size;
+	uint32_t blocks;
+	mask_t mask;
 
 	do {
-		// create shifted mask with bits set where `blocks` can be allocated
-		sh_mask = free_mask;
-		for (i = 1; i < blocks; i++) {
-			sh_mask &= (sh_mask >> 1);
+		block = queue_recv();
+		if (block < 0) {
+			break;
 		}
 
-		// if no memory
-		if (sh_mask == 0) {
-			// wait for any slot to be empty
-			k_mutex_unlock(&out_mutex);
-			nrf_rpc_os_sem_take(&out_sem);
-			sem_taken = true;
-			//k_mutex_lock(&out_mutex, K_FOREVER);
-			// if any slot is empty reclaim its memory
-			for (i = 0; i < NRF_RPC_OUT_ENDPOINTS; i++) {
-				if (out_slots[i] == SLOT_EMPTY) {
-					free_mask ^= endpoint_mask[i];
-					endpoint_mask[i] = 0;
-				}
+		release = (block & FLAG_RELEASE);
+		block &= ~FLAG_RELEASE;
+
+		if (block >= NUM_BLOCKS) {
+			continue;
+		}
+
+
+		if (release) {
+			mem_start = (uint32_t *)(&out_allocable[block * OUT_BLOCK_SIZE]);
+			total_size = mem_start[0];
+			blocks = (total_size + OUT_BLOCK_SIZE - 1) / OUT_BLOCK_SIZE;
+			free_mask_set(calc_mask(blocks, block));
+			nrf_rpc_os_give(&out_sem);
+		} else {
+			mem_start = (uint32_t *)(&in_allocable[block * IN_BLOCK_SIZE]);
+			total_size = mem_start[0];
+			if (total_size >= &in_allocable[IN_ALLOCABLE_SIZE] - (uint8_t *)mem_start || total_size < WORD_SIZE) {
+				memory_corrupted_error();
+				break;
 			}
+			receive_handler((uint8_t *)&mem_start[1], total_size - WORD_SIZE);
 		}
-
-	} while (sh_mask == 0);
-
-	// get first available blocks
-	size_t free_index = MASK_CTZ(sh_mask);
-	// create bit mask with blocks that will be used
-	mask_t mask = ((blocks == NUM_BLOCKS) ? ~(mask_t)0 : (((mask_t)1 << blocks) - 1)) << free_index;
-	// update masks
-	free_mask ^= mask;
-	endpoint_mask[addr] = mask;
-	// mark this slot as pending: memory cannot be reclaimed and remote side will not consume it
-	out_slots[addr] = SLOT_PENDING;
-
-	k_mutex_unlock(&out_mutex);
-	
-	// Give semaphore back, because there may be some other thread waiting
-	if (sem_taken && free_mask != 0) {
-		k_sem_give(&out_sem);
-	}
-
-	uint32_t *mem_start = (uint32_t *)&out_allocable[OUT_BLOCK_SIZE * free_index];
-
-	mem_start[0] = size;
-
-	return &mem_start[1];
+	} while (true);
 }
+
+void nrf_rpc_tr_free_rx_buf(const uint8_t *packet)
+{
+	int err;
+	uint32_t *mem_start = (uint32_t *)packet - 1;
+	uint32_t offset = (uint8_t *)mem_start - in_allocable;
+	uint32_t block_index = offset / IN_BLOCK_SIZE;
+
+	NRF_RPC_ASSERT(block_index < NUM_BLOCKS);
+
+	queue_send(block_index | FLAG_RELEASE);
+}
+
+static void handshake_step(uint8_t this_value, uint8_t next_value)
+{
+	*out_handshake = this_value;
+	NRF_RPC_OS_MEMORY_BARIER();
+	while (*in_handshake != this_value && *in_handshake != next_value) {
+		nrf_rpc_os_yield();
+		NRF_RPC_OS_MEMORY_BARIER();
+	}
+}
+
+int nrf_rpc_tr_init(nrf_rpc_tr_receive_handler_t callback)
+{
+	receive_handler = callback;
+
+	free_mask_init();
+	nrf_rpc_os_sem_init(&out_sem);
+	nrf_rpc_os_mutex_init(&out_mutex);
+
+#if !NRF_RPC_OS_SHMEM_PTR_CONST
+	out_allocable = (uint8_t *)nrf_rpc_os_out_shmem_ptr;
+	out_queue_tx = (uint32_t *)&out_allocable[OUT_ALLOCABLE_SIZE];
+	out_queue_rx = (uint32_t *)&out_allocable[OUT_ALLOCABLE_SIZE + WORD_SIZE];
+	out_queue = (uint8_t *)&out_allocable[OUT_ALLOCABLE_SIZE + 2 * WORD_SIZE];
+	out_handshake = (uint8_t *)&out_allocable[OUT_TOTAL_SIZE - 1];
+	in_allocable = (uint8_t *)nrf_rpc_os_in_shmem_ptr;
+	in_queue_tx = (uint32_t *)&in_allocable[IN_ALLOCABLE_SIZE];
+	in_queue_rx = (uint32_t *)&in_allocable[IN_ALLOCABLE_SIZE + WORD_SIZE];
+	in_queue = (uint8_t *)&in_allocable[IN_ALLOCABLE_SIZE + 2 * WORD_SIZE];
+	in_handshake = (uint8_t *)&in_allocable[IN_TOTAL_SIZE - 1];
+#endif
+
+	handshake_step(0x32, 0x43);
+	handshake_step(0x43, 0xF6);
+
+	*out_queue_tx = 0;
+	*out_queue_rx = 0;
+	*in_queue_tx = 0;
+	*in_queue_rx = 0;
+	
+	nrf_rpc_os_signal_handler(signal_received);
+
+	handshake_step(0xF6, 0xA8);
+	handshake_step(0xA8, 0xA8);
+}
+
+#if 0
+
+
+static inline void uint32_t mask_ctz(mask_t mask)
+{
+	return 0; // TODO: 
+}
+
+
+
+struct nrf_rpc_os_mutex
+{
+	int a;
+};
+
+static struct nrf_rpc_os_mutex mutex;
+
+
 
 
 // send allocated memory: set slot from pending to specific index
-void out_shmem_send(uint32_t addr, uint8_t* buffer)
-{
-	out_slots[addr] = buffer - 4 - out_allocable;
-	signal_with_data(addr);
-}
 
+void _nrf_rpc_tr_send_noret(uint8_t *buffer, size_t size)
+{
+	uint32_t *mem_start = (uint32_t *)buffer - 1;
+	uint32_t offset = (uint8_t *)mem_start - out_allocable;
+	uint32_t block_index = offset / OUT_BLOCK_SIZE;
+	uint32_t allocated_size;
+	uint32_t allocated_blocks;
+	uint32_t blocks = size / OUT_BLOCK_SIZE;
+	uint32_t total_size = size + WORD_SIZE;
+	mask_t mask;
+
+	NRF_RPC_ASSERT(block_index < NUM_BLOCKS);
+	NRF_RPC_ASSERT(buffer == &out_allocable[block_index * OUT_BLOCK_SIZE]);
+
+	allocated_size = mem_start[0];
+	allocated_blocks = allocated_size / OUT_BLOCK_SIZE;
+
+	NRF_RPC_ASSERT(allocated_size <= OUT_ALLOCABLE_SIZE);
+	NRF_RPC_ASSERT(offset + allocated_size <= OUT_ALLOCABLE_SIZE);
+	NRF_RPC_ASSERT(total_size <= allocated_size);
+
+	if (blocks < allocated_blocks) {
+		mask_t mask = (((mask_t)1 << (allocated_blocks - blocks)) - 1) << (block_index + blocks);
+
+		free_mask_set(mask);
+		k_sem_give(&out_sem);
+	}
+
+	mem_start[0] = total_size;
+
+	k_mutex_lock(&out_mutex);
+	send_data(block_index);
+	k_mutex_unlock(&out_mutex);
+}
 
 
 // discard allocated buffer without sending
-void out_shmem_discard(uint32_t addr)
+void nrf_rpc_tr_free_tx_buf(uint8_t* buffer)
 {
-	out_slots[addr] = SLOT_EMPTY;
+	uint32_t *mem_start = (uint32_t *)buffer - 1;
+	uint32_t offset = (uint8_t *)mem_start - out_allocable;
+	uint32_t block_index = offset / OUT_BLOCK_SIZE;
+	uint32_t allocated_size;
+	uint32_t allocated_blocks;
+	mask_t mask;
 
-	//k_mutex_lock(&out_mutex, K_FOREVER); // Maybe lock scheduler?
+	NRF_RPC_ASSERT(block_index < NUM_BLOCKS);
+	NRF_RPC_ASSERT(buffer == &out_allocable[block_index * OUT_BLOCK_SIZE]);
 
-	// reclaim its memory
-	free_mask ^= endpoint_mask[addr];
-	endpoint_mask[addr] = 0;
+	allocated_size = mem_start[0];
+	allocated_blocks = allocated_size / OUT_BLOCK_SIZE;
 
-	k_mutex_unlock(&out_mutex);
+	NRF_RPC_ASSERT(allocated_size <= OUT_ALLOCABLE_SIZE);
+	NRF_RPC_ASSERT(offset + allocated_size <= OUT_ALLOCABLE_SIZE);
 
+	mask = ((allocated_blocks == NUM_BLOCKS) ? ~(mask_t)0 : (((mask_t)1 << allocated_blocks) - 1)) << block_index;
+
+	free_mask_set(mask);
 	k_sem_give(&out_sem);
 }
 
-// receive data from input shared memory
-int in_shmem_recv(uint32_t addr, uint8_t **buf)
+
+static int recv_data()
 {
-	uint32_t index = in_slots[addr];
+	uint32_t tx = *in_queue_tx;
+	uint32_t rx = *in_queue_rx;
+	uint8_t data;
 
-	if (index > SLOT_STATE_MAX) {
-		return NRF_RPC_ERR_EMPTY;
-	} else if (index > OUT_SIZE_ALLOCABLE - 4) {
-		return NRF_RPC_ERR_INTERNAL;
+	tx = *in_queue_tx;
+	rx = *in_queue_rx;
+
+	if (tx == rx || rx >= IN_QUEUE_ITEMS) {
+		return -1;
 	}
 
-	uint32_t *mem_start = (uint32_t *)&in_allocable[index];
-	size_t size = mem_start[0];
+	NRF_RPC_OS_MEMORY_BARIER();
 
-	if (index + 4 + size > OUT_SIZE_ALLOCABLE) {
-		in_shmem_consume(addr);
-		return NRF_RPC_ERR_INTERNAL;
+	data = in_queue[rx];
+
+	rx++;
+	if (rx >= IN_QUEUE_ITEMS) {
+		rx = 0;
 	}
 
-	*buf = &mem_start[1];
+	*in_queue_rx = rx;
+
+	return data;
+}
+
+void nrf_rpc_os_signaled()
+{
+	uint32_t *mem_start;
+	uint32_t total_size;
 	
-	return size;
+	do {
+		int block = recv_data();
+		int release = (block & FLAG_RELEASE);
+		block &= ~FLAG_RELEASE;
+
+		if (block < 0) {
+			break;
+		} else if (block >= NUM_BLOCKS) {
+			NRF_RPC_ERR("Invalid item received from input queue");
+			continue;
+		}
+
+		if (release) {
+			uint32_t *mem_start = out_allocable[block * OUT_BLOCK_SIZE];
+			uint32_t total_size = mem_start[0];
+			uint32_t blocks = (total_size + OUT_BLOCK_SIZE - 1) / OUT_BLOCK_SIZE;
+			mask_t mask = ((blocks == NUM_BLOCKS) ? ~(mask_t)0 : (((mask_t)1 << blocks) - 1)) << block;
+			free_mask_set(mask);
+			nrf_rpc_os_sem_give(&out_sem);
+		} else {
+			uint32_t *mem_start = in_allocable[block * IN_BLOCK_SIZE];
+			uint32_t total_size = mem_start[0];
+			if (total_size >= &in_allocable[IN_ALLOCABLE_SIZE] - (uint8_t *)mem_start || total_size < WORD_SIZE) {
+				NRF_RPC_ERR("Invalid size of the received buffer");
+				continue;
+			}
+			receive_handler((uint8_t *)&mem_start[1], total_size - WORD_SIZE);
+		}
+	} while (true);
 }
 
-// consume incoming data i.e. mark slot as empty and signal remote about it
-void in_shmem_consume(uint32_t addr)
+int nrf_rpc_tr_init(nrf_rpc_tr_receive_handler callback)
 {
-	out_slots[addr] = SLOT_EMPTY;
-	signal_with_data(0xFF);
+
 }
+
+#if 0
+
 
 #define O(x) ((int)((uint8_t*)(x) - base))
 
@@ -300,15 +606,15 @@ int nrf_rpc_tr_init()
 
 #	if !NRF_RPC_OS_SHMEM_PTR_CONST
 	out_allocable = (uint8_t *)nrf_rpc_os_out_shmem_ptr;
-	out_slots = (uint32_t *)&out_allocable[OUT_SIZE_ALLOCABLE];
-	out_queue_tx = (uint32_t *)&out_allocable[OUT_SIZE_ALLOCABLE + OUT_SIZE_SLOTS];
-	out_queue_rx = (uint32_t *)&out_allocable[OUT_SIZE_ALLOCABLE + OUT_SIZE_SLOTS + WORD_SIZE];
-	out_queue = (uint8_t *)&out_allocable[OUT_SIZE_ALLOCABLE + OUT_SIZE_SLOTS + 2 * WORD_SIZE];
+	out_slots = (uint32_t *)&out_allocable[OUT_ALLOCABLE_SIZE];
+	out_queue_tx = (uint32_t *)&out_allocable[OUT_ALLOCABLE_SIZE + OUT_SIZE_SLOTS];
+	out_queue_rx = (uint32_t *)&out_allocable[OUT_ALLOCABLE_SIZE + OUT_SIZE_SLOTS + WORD_SIZE];
+	out_queue = (uint8_t *)&out_allocable[OUT_ALLOCABLE_SIZE + OUT_SIZE_SLOTS + 2 * WORD_SIZE];
 	in_allocable = (uint8_t *)nrf_rpc_os_in_shmem_ptr;
-	in_slots = (uint32_t *)&in_allocable[IN_SIZE_ALLOCABLE];
-	in_queue_tx = (uint32_t *)&in_allocable[IN_SIZE_ALLOCABLE + IN_SIZE_SLOTS];
-	in_queue_rx = (uint32_t *)&in_allocable[IN_SIZE_ALLOCABLE + IN_SIZE_SLOTS + WORD_SIZE];
-	in_queue = (uint8_t *)&in_allocable[IN_SIZE_ALLOCABLE + IN_SIZE_SLOTS + 2 * WORD_SIZE];
+	in_slots = (uint32_t *)&in_allocable[IN_ALLOCABLE_SIZE];
+	in_queue_tx = (uint32_t *)&in_allocable[IN_ALLOCABLE_SIZE + IN_SIZE_SLOTS];
+	in_queue_rx = (uint32_t *)&in_allocable[IN_ALLOCABLE_SIZE + IN_SIZE_SLOTS + WORD_SIZE];
+	in_queue = (uint8_t *)&in_allocable[IN_ALLOCABLE_SIZE + IN_SIZE_SLOTS + 2 * WORD_SIZE];
 #	endif
 
 	print_addresses();
@@ -376,3 +682,5 @@ void test()
 {
 	LOG("DONE");
 }
+
+#endif

@@ -1,0 +1,67 @@
+<html>
+
+<script>
+
+function calc()
+{
+	clearTimeout(t);
+	t = setTimeout(calc2, 50);
+}
+
+function calc2()
+{
+	let CONFIG_NRF_RPC_SHMEM_OUT_SIZE = parseFloat(document.getElementById('out_size').value);
+	let CONFIG_NRF_RPC_SHMEM_IN_SIZE = parseFloat(document.getElementById('in_size').value);
+	let NUM_BLOCKS = document.getElementById('bits_64').checked ? 64 : 32;
+	let WORD_SIZE = 4;
+
+	let ALLOCABLE_MULTIPLY = (WORD_SIZE * NUM_BLOCKS);
+
+	let OUT_TOTAL_SIZE = CONFIG_NRF_RPC_SHMEM_OUT_SIZE;
+	let OUT_ALLOCABLE_SIZE = (Math.floor((OUT_TOTAL_SIZE - (2 * WORD_SIZE + 2 * NUM_BLOCKS + 1)) / ALLOCABLE_MULTIPLY) * ALLOCABLE_MULTIPLY);
+	let OUT_QUEUE_SIZE = (OUT_TOTAL_SIZE - OUT_ALLOCABLE_SIZE);
+	let OUT_QUEUE_ITEMS = (OUT_QUEUE_SIZE - 2 * WORD_SIZE);
+	let OUT_BLOCK_SIZE = (OUT_ALLOCABLE_SIZE / NUM_BLOCKS);
+
+	let IN_TOTAL_SIZE = CONFIG_NRF_RPC_SHMEM_IN_SIZE;
+	let IN_ALLOCABLE_SIZE = (Math.floor((IN_TOTAL_SIZE - (2 * WORD_SIZE + 2 * NUM_BLOCKS + 1)) / ALLOCABLE_MULTIPLY) * ALLOCABLE_MULTIPLY);
+	let IN_QUEUE_SIZE = (IN_TOTAL_SIZE - IN_ALLOCABLE_SIZE);
+	let IN_QUEUE_ITEMS = (IN_QUEUE_SIZE - 2 * WORD_SIZE);
+	let IN_BLOCK_SIZE = (IN_ALLOCABLE_SIZE / NUM_BLOCKS);
+
+	let text = `
+	Output:            ${OUT_TOTAL_SIZE} bytes (${OUT_TOTAL_SIZE / 1024} KB)
+		Allocable: ${OUT_ALLOCABLE_SIZE} bytes = ${NUM_BLOCKS} blocks * ${OUT_BLOCK_SIZE} bytes
+		Queue:     ${OUT_QUEUE_SIZE} bytes = ${OUT_QUEUE_ITEMS} items + 2 pointers
+
+	Input:             ${IN_TOTAL_SIZE} bytes (${IN_TOTAL_SIZE / 1024} KB)
+		Allocable: ${IN_ALLOCABLE_SIZE} bytes = ${NUM_BLOCKS} blocks * ${IN_BLOCK_SIZE} bytes
+		Queue:     ${IN_QUEUE_SIZE} bytes = ${IN_QUEUE_ITEMS} items + 2 pointers
+	
+	Total:             ${OUT_TOTAL_SIZE + IN_TOTAL_SIZE} bytes
+	`;
+
+	document.getElementById('results').innerText = text;
+
+}
+
+let t = setTimeout(calc2, 100);
+
+</script>
+
+<body>
+
+	CONFIG_NRF_RPC_SHMEM_OUT_SIZE: <input type="text" value="2048" id="out_size" onchange="calc()"
+		onkeydown="calc()" onkeyup="calc()" onclick="calc()" /><br />
+	CONFIG_NRF_RPC_SHMEM_IN_SIZE: <input type="text" value="2048" id="in_size" onchange="calc()" onkeydown="calc()"
+		onkeyup="calc()" onclick="calc()" /><br />
+	<input type="radio" id="bits_64" name="bits" checked value="64" onchange="calc()" onkeydown="calc()"
+		onkeyup="calc()" onclick="calc()"> CONFIG_NRF_RPC_SHMEM_NUM_BLOCKS_64<br />
+	<input type="radio" id="bits_32" name="bits" value="32" onchange="calc()" onkeydown="calc()" onkeyup="calc()"
+		onclick="calc()"> CONFIG_NRF_RPC_SHMEM_NUM_BLOCKS_32<br />
+
+	<pre id="results"></pre>
+
+</body>
+
+</html>

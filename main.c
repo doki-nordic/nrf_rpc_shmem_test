@@ -22,11 +22,126 @@
 #include <fcntl.h>
 #include <pthread.h>
 
-#include "conf.h"
-#include "nrf_rpc_os.h"
+#include "nrf_rpc.h"
+#include "nrf_rpc_log.h"
+
+#define ID_TEST 1
+
+NRF_RPC_GROUP_DEFINE(test_group, "test_group", NULL, NULL, NULL);
+NRF_RPC_GROUP_DEFINE(test_group21, "xyz", NULL, NULL, NULL);
+NRF_RPC_GROUP_DEFINE(test_group3, "abc", NULL, NULL, NULL);
 
 
+void test_rsp_handler(const uint8_t *packet, size_t len, void *handler_data)
+{
+	NRF_RPC_WRN("HANDLER %d", *(const uint32_t*)packet);
+}
 
+int test__;
+
+void test_rpc(uint32_t x)
+{
+	uint8_t *packet;
+
+	NRF_RPC_ALLOC(packet, 4);
+
+	*(uint32_t*)packet = x;
+
+	nrf_rpc_cmd_no_err(&test_group, ID_TEST, packet, 4, test_rsp_handler, &test__);
+}
+
+void test_rpc_handler(const uint8_t *packet, size_t len, void *handler_data)
+{
+	uint8_t *rsp;
+
+	NRF_RPC_WRN("TEST RPC %d", *(const uint32_t*)packet);
+
+	NRF_RPC_ALLOC(rsp, 4);
+
+	*(uint32_t*)rsp = *(const uint32_t*)packet + 1;
+
+	nrf_rpc_rsp_no_err(rsp, 4);
+}
+
+
+NRF_RPC_CMD_DECODER(test_group, test_rpc_dec, ID_TEST, test_rpc_handler, NULL);
+
+static struct _nrf_rpc_auto_arr_item *first_item = NULL;
+static void** auto_arr;
+
+void _nrf_rpc_auto_arr_item_init(struct _nrf_rpc_auto_arr_item *item, const void *data, const char *key, bool is_array)
+{
+	item->data = data;
+	item->key = key;
+	item->is_array = is_array;
+	item->next = first_item;
+	first_item = item;
+}
+
+int auto_arr_cmp(const void *a, const void *b)
+{
+	struct _nrf_rpc_auto_arr_item **aa = (struct _nrf_rpc_auto_arr_item **)a;
+	struct _nrf_rpc_auto_arr_item **bb = (struct _nrf_rpc_auto_arr_item **)b;
+
+	return strcmp((*aa)->key, (*bb)->key);
+}
+
+static int auto_arr_init(void)
+{
+	size_t i;
+	size_t count = 0;
+	struct _nrf_rpc_auto_arr_item **items;
+	struct _nrf_rpc_auto_arr_item *item;
+
+	item = first_item;
+	while (item != NULL) {
+		count++;
+		item = item->next;
+	}
+
+	items = malloc(sizeof(struct _nrf_rpc_auto_arr_item *) * (count + 1));
+	if (items == NULL) {
+		return -ENOMEM;
+	}
+
+	auto_arr = (void **)items;
+	
+	i = 0;
+	item = first_item;
+	while (item != NULL) {
+		items[i] = item;
+		i++;
+		item = item->next;
+	}
+	items[i] = NULL;
+
+	qsort(items, count, sizeof(struct _nrf_rpc_auto_arr_item *), auto_arr_cmp);
+
+	for (i = 0; i < count; i++) {
+		item = items[i];
+		if (item->is_array) {
+			auto_arr[i] = NULL;
+			*(void ***)item->data = &auto_arr[i + 1];
+		} else {
+			auto_arr[i] = (void *)item->data;
+		}
+	}
+
+	return 0;
+}
+
+int main()
+{
+	sleep(1);
+	auto_arr_init();
+	nrf_rpc_init(NULL);
+	test_rpc(IS_MASTER ? 10 : 20);
+	NRF_RPC_DBG("TEST DONE");
+	sleep(10);
+	return 0;
+}
+
+#if 0
 int main()
 {
 	//nrf_rpc_tr_init();
@@ -129,4 +244,5 @@ int main(int argc, char* argv[])
 
 	return 0;
 }
+#endif
 #endif

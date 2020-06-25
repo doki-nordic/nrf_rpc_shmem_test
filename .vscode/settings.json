@@ -1,0 +1,9 @@
+{
+	"C_Cpp.default.defines": [],
+	"C_Cpp.default.forcedInclude": [
+		"conf.h"
+	],
+	"files.associations": {
+		"type_traits": "c"
+	}
+}
