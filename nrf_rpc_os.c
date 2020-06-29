@@ -1,4 +1,3 @@
-
 #define NRF_RPC_LOG_MODULE NRF_RPC_OS
 #include <nrf_rpc_log.h>
 
@@ -54,6 +53,8 @@ int _nrf_rpc_log_level = LOG_LEVEL_UNINITIALIZED;
 
 void *nrf_rpc_os_out_shmem_ptr;
 void *nrf_rpc_os_in_shmem_ptr;
+
+static __thread char log_thread_name[5];
 
 static const char *shmem_name = "/nrf_rpc_shmem";
 static sem_t *ipc_in;
@@ -142,10 +143,7 @@ static void *thread_pool_main(void* param)
 	const uint8_t *data;
 	size_t len;
 
-	extern __thread const char *_nrf_rpc_name;
-	char name[3] = "TPx";
-	name[2] = (char)(uintptr_t)param;
-	_nrf_rpc_name = name;
+	sprintf(log_thread_name, "tp%02d", (int)(uintptr_t)param);
 
 	do {
 		pthread_mutex_lock(&thread_pool_msg.event.mutex);
@@ -231,6 +229,17 @@ void _nrf_rpc_log_dump(int level, const uint8_t *memory, size_t len, const char 
 	// TODO: _nrf_rpc_log_dump
 }
 
+char *_nrf_rpc_log_thread()
+{
+	static int user_thread_counter = 0;
+	if (!log_thread_name[0]) {
+		sprintf(log_thread_name, "ut%02d", user_thread_counter);
+		user_thread_counter++;
+	}
+	return log_thread_name;
+}
+
+
 static void (*signal_handler)(void) = NULL;
 
 void nrf_rpc_os_signal_handler(void (*handler)(void))
@@ -238,12 +247,9 @@ void nrf_rpc_os_signal_handler(void (*handler)(void))
 	signal_handler = handler;
 }
 
-__thread const char *_nrf_rpc_name;
-
 static void *events_reading_thread_main(void* param)
 {
-	extern __thread const char *_nrf_rpc_name;
-	_nrf_rpc_name = "SIG";
+	strcpy(log_thread_name, "sign");
 	do {
 		if (sem_wait(ipc_in) < 0) {
 			NRF_RPC_ERR("Waiting for signal error. Exiting...");
@@ -284,7 +290,6 @@ int nrf_rpc_os_init(nrf_rpc_os_work_t callback)
 
 	signal_handler = NULL;
 	thread_pool_callback = callback;
-	_nrf_rpc_name = "DEF";
 
 	nrf_rpc_os_event_init(&ctx_pool_event);
 	nrf_rpc_os_event_init(&remote_thread_event);
@@ -360,7 +365,7 @@ int nrf_rpc_os_init(nrf_rpc_os_work_t callback)
 
 	for (i = 0; i < CONFIG_NRF_RPC_THREAD_POOL_SIZE; i++)
 	{
-		pthread_create(&thread_pool[i], NULL, thread_pool_main, (void*)(uintptr_t)('0' + i));
+		pthread_create(&thread_pool[i], NULL, thread_pool_main, (void*)(uintptr_t)i);
 	}
 
 	return 0;

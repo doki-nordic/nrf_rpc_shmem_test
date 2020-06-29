@@ -80,15 +80,16 @@ void _nrf_rpc_auto_arr_item_init(struct _nrf_rpc_auto_arr_item *item, const void
 
 int auto_arr_cmp(const void *a, const void *b)
 {
-	struct _nrf_rpc_auto_arr_item **aa = (struct _nrf_rpc_auto_arr_item **)a;
-	struct _nrf_rpc_auto_arr_item **bb = (struct _nrf_rpc_auto_arr_item **)b;
+	struct _nrf_rpc_auto_arr_item **l = (struct _nrf_rpc_auto_arr_item **)a;
+	struct _nrf_rpc_auto_arr_item **r = (struct _nrf_rpc_auto_arr_item **)b;
 
-	return strcmp((*aa)->key, (*bb)->key);
+	return strcmp((*l)->key, (*r)->key);
 }
 
 static int auto_arr_init(void)
 {
 	size_t i;
+	size_t j;
 	size_t count = 0;
 	struct _nrf_rpc_auto_arr_item **items;
 	struct _nrf_rpc_auto_arr_item *item;
@@ -99,7 +100,7 @@ static int auto_arr_init(void)
 		item = item->next;
 	}
 
-	items = malloc(sizeof(struct _nrf_rpc_auto_arr_item *) * (count + 1));
+	items = malloc(sizeof(void *) * (count + 1));
 	if (items == NULL) {
 		return -ENOMEM;
 	}
@@ -117,13 +118,20 @@ static int auto_arr_init(void)
 
 	qsort(items, count, sizeof(struct _nrf_rpc_auto_arr_item *), auto_arr_cmp);
 
+	NRF_RPC_DBG("AUTO_ARR items:");
+
+	j = 0;
 	for (i = 0; i < count; i++) {
 		item = items[i];
 		if (item->is_array) {
 			auto_arr[i] = NULL;
 			*(void ***)item->data = &auto_arr[i + 1];
+			NRF_RPC_DBG("%03d array: %s", (int)i, item->key);
+			j = 0;
 		} else {
 			auto_arr[i] = (void *)item->data;
+			NRF_RPC_DBG("%03d        [%d] %s", (int)i, (int)j, item->key);
+			j++;
 		}
 	}
 
@@ -132,12 +140,11 @@ static int auto_arr_init(void)
 
 int main()
 {
-	sleep(1);
 	auto_arr_init();
 	nrf_rpc_init(NULL);
 	test_rpc(IS_MASTER ? 10 : 20);
 	NRF_RPC_DBG("TEST DONE");
-	sleep(10);
+	sleep(1);
 	return 0;
 }
 
