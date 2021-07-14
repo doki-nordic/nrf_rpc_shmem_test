@@ -7,6 +7,7 @@
 
 #include <sys/types.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <signal.h>
 #include <signal.h>
@@ -66,81 +67,9 @@ void test_rpc_handler(const uint8_t *packet, size_t len, void *handler_data)
 
 NRF_RPC_CMD_DECODER(test_group, test_rpc_dec, ID_TEST, test_rpc_handler, NULL);
 
-static struct _nrf_rpc_auto_arr_item *first_item = NULL;
-static void** auto_arr;
-
-void _nrf_rpc_auto_arr_item_init(struct _nrf_rpc_auto_arr_item *item, const void *data, const char *key, bool is_array)
-{
-	item->data = data;
-	item->key = key;
-	item->is_array = is_array;
-	item->next = first_item;
-	first_item = item;
-}
-
-int auto_arr_cmp(const void *a, const void *b)
-{
-	struct _nrf_rpc_auto_arr_item **l = (struct _nrf_rpc_auto_arr_item **)a;
-	struct _nrf_rpc_auto_arr_item **r = (struct _nrf_rpc_auto_arr_item **)b;
-
-	return strcmp((*l)->key, (*r)->key);
-}
-
-static int auto_arr_init(void)
-{
-	size_t i;
-	size_t j;
-	size_t count = 0;
-	struct _nrf_rpc_auto_arr_item **items;
-	struct _nrf_rpc_auto_arr_item *item;
-
-	item = first_item;
-	while (item != NULL) {
-		count++;
-		item = item->next;
-	}
-
-	items = malloc(sizeof(void *) * (count + 1));
-	if (items == NULL) {
-		return -ENOMEM;
-	}
-
-	auto_arr = (void **)items;
-	
-	i = 0;
-	item = first_item;
-	while (item != NULL) {
-		items[i] = item;
-		i++;
-		item = item->next;
-	}
-	items[i] = NULL;
-
-	qsort(items, count, sizeof(struct _nrf_rpc_auto_arr_item *), auto_arr_cmp);
-
-	NRF_RPC_DBG("AUTO_ARR items:");
-
-	j = 0;
-	for (i = 0; i < count; i++) {
-		item = items[i];
-		if (item->is_array) {
-			auto_arr[i] = NULL;
-			*(void ***)item->data = &auto_arr[i + 1];
-			NRF_RPC_DBG("%03d array: %s", (int)i, item->key);
-			j = 0;
-		} else {
-			auto_arr[i] = (void *)item->data;
-			NRF_RPC_DBG("%03d        [%d] %s", (int)i, (int)j, item->key);
-			j++;
-		}
-	}
-
-	return 0;
-}
 
 int main()
 {
-	auto_arr_init();
 	nrf_rpc_init(NULL);
 	test_rpc(IS_MASTER ? 10 : 20);
 	NRF_RPC_DBG("TEST DONE");

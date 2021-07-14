@@ -63,7 +63,7 @@ static uint8_t *shared_memory;
 static pthread_t events_reading_thread;
 static pthread_t thread_pool[CONFIG_NRF_RPC_THREAD_POOL_SIZE];
 
-static uint64_t ctx_pool_free = (((uint64_t)1 << CONFIG_NRF_RPC_CMD_CTX_POLL_SIZE) - 1);
+static uint64_t ctx_pool_free = (((uint64_t)1 << CONFIG_NRF_RPC_CMD_CTX_POOL_SIZE) - 1);
 static struct nrf_rpc_os_event ctx_pool_event;
 
 static uint32_t remote_thread_count = 0;
@@ -157,6 +157,8 @@ static void *thread_pool_main(void* param)
 		pthread_mutex_unlock(&thread_pool_msg.event.mutex);
 		thread_pool_callback(data, len);
 	} while (true);
+
+	return NULL;
 }
 
 static void init_log(void)
