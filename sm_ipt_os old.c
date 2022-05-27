@@ -1,3 +1,4 @@
+
 #define NRF_RPC_LOG_MODULE NRF_RPC_OS
 #include <nrf_rpc_log.h>
 
@@ -27,7 +28,7 @@
 #include <errno.h>
 #include <stdarg.h>
 
-#include "nrf_rpc_os.h"
+#include "sm_ipt_os.h"
 
 #define LOG_LEVEL_UNINITIALIZED 1000
 

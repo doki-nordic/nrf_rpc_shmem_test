@@ -4,6 +4,11 @@
 		"conf.h"
 	],
 	"files.associations": {
-		"type_traits": "c"
-	}
+		"type_traits": "c",
+		"sm_ipt_log.h": "c",
+		"sm_ipt.h": "c"
+	},
+	"editor.tabSize": 4,
+	"editor.detectIndentation": false,
+	"editor.insertSpaces": false
 }

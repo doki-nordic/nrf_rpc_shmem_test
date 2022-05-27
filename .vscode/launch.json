@@ -8,7 +8,7 @@
 			"name": "(gdb) Launch",
 			"type": "cppdbg",
 			"request": "launch",
-			"program": "${workspaceFolder}/shmem_test",
+			"program": "${workspaceFolder}/sm_ipt_test",
 			"args": [],
 			"stopAtEntry": false,
 			"cwd": "${workspaceFolder}",

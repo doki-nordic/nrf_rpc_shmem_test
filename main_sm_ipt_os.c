@@ -3,19 +3,17 @@
 
 #include "sm_ipt_log.h"
 #include "sm_ipt_os.h"
-#include "sm_ipt.h"
 
-struct sm_ipt_ctx ctx;
+struct sm_ipt_os_ctx os_ctx;
 struct sm_ipt_linux_param param;
+struct sm_ipt_os_shmem_conf conf;
 
-void handler(struct sm_ipt_ctx *ctx, const uint8_t *packet, size_t len) {
+void handler(struct sm_ipt_os_ctx *ctx) {
 	printf("Handler\n");
-	sm_ipt_free_rx_buf(ctx, packet);
 }
 
 int main() {
 	char* env;
-	int err;
 
 	nrf_rpc_log_set_thread_name("main");
 
@@ -51,12 +49,11 @@ int main() {
 		param.output_size = t;
 	}
 
-	err = sm_ipt_init(&ctx, handler, &param);
-	SM_IPT_DBG("sm_ipt_init: %d", err);
+	sm_ipt_os_init_shmem(&os_ctx, &param, &conf);
+	sm_ipt_os_init_signals(&os_ctx, &param, handler);
 
-	uint8_t* buf;
-	sm_ipt_alloc_tx_buf(&ctx, &buf, 2048);
-	sm_ipt_send(&ctx, buf, 2000);
+	sleep(1);
+	sm_ipt_os_signal(&os_ctx);
 
 	sleep(10);
 

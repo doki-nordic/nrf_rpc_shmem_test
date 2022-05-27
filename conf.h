@@ -3,35 +3,25 @@
 
 #include <stdio.h>
 
-
-#define CONFIG_NRF_RPC 1
-#define CONFIG_NRF_RPC_CBOR 1
-//#define CONFIG_NRF_RPC_TR_RPMSG 0
-#define CONFIG_NRF_RPC_TR_CUSTOM 1
-#define CONFIG_NRF_RPC_TR_CUSTOM_INCLUDE "nrf_rpc_shmem.h"
-#define CONFIG_NRF_RPC_THREAD_POOL_SIZE 3
-#define CONFIG_NRF_RPC_CMD_CTX_POOL_SIZE 8
-#define CONFIG_NRF_RPC_AUTO_ARR_CONSTRUCTOR 1
-
-//#define CONFIG_NRF_RPC_SHMEM_NUM_BLOCKS_32 0
-#define CONFIG_NRF_RPC_SHMEM_NUM_BLOCKS_64 1
+#define CONFIG_SM_IPT_NUM_BLOCKS_64 1
 
 #ifdef MASTER
-
-#define CONFIG_NRF_RPC_SHMEM_IN_SIZE 1024
-#define CONFIG_NRF_RPC_SHMEM_OUT_SIZE 2048
 
 #define IS_MASTER 1
 #define IS_SLAVE 0
 
 #else
 
-#define CONFIG_NRF_RPC_SHMEM_OUT_SIZE 1024
-#define CONFIG_NRF_RPC_SHMEM_IN_SIZE 2048
-
 #define IS_MASTER 0
 #define IS_SLAVE 1
 
 #endif
+
+
+#define Z_IS_ENABLED1(config_macro) Z_IS_ENABLED2(_XXXX##config_macro)
+#define _XXXX1 _YYYY,
+#define Z_IS_ENABLED2(one_or_two_args) Z_IS_ENABLED3(one_or_two_args 1, 0)
+#define Z_IS_ENABLED3(ignore_this, val, ...) val
+#define IS_ENABLED(config_macro) Z_IS_ENABLED1(config_macro)
 
 #endif // CONF_H_
