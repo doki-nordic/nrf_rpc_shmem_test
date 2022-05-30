@@ -161,15 +161,6 @@ static inline void sm_ipt_os_give(sm_ipt_os_sem_t *sem) {
 	pthread_mutex_unlock(&sem->mutex);
 }
 
-static inline void sm_ipt_os_yield() {
-	usleep(5000);
-}
-
-static inline void sm_ipt_os_fatal(void)
-{
-	exit(32);
-}
-
 static inline int sm_ipt_os_clz64(uint64_t value)
 {
 	return __builtin_clzll(value);
