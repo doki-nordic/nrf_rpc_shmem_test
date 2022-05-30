@@ -30,6 +30,18 @@
 #include "sm_ipt_log.h"
 #include "sm_ipt_os.h"
 
+#define WORD_SIZE 8 // also support 64-bit architecture
+
+#ifdef CONFIG_SM_IPT_CACHE_LINE_BYTES
+#if CONFIG_SM_IPT_CACHE_LINE_BYTES > WORD_SIZE
+#define ALIGN_SIZE CONFIG_SM_IPT_CACHE_LINE_BYTES
+#else
+#define ALIGN_SIZE WORD_SIZE
+#endif
+#else
+#define ALIGN_SIZE WORD_SIZE
+#endif
+
 
 struct ipc_events {
 	sem_t sem_out;
@@ -144,11 +156,21 @@ static void *events_reading_thread_main(void* param)
 static void set_and_wait(volatile uint8_t *in, volatile uint8_t *out, uint8_t this_value, uint8_t next_value)
 {
 	*out = this_value;
-	SM_IPT_OS_MEMORY_BARRIER();
+	__sync_synchronize();
 	while (*in != this_value && *in != next_value) {
 		usleep(1000);
-		SM_IPT_OS_MEMORY_BARRIER();
+		__sync_synchronize();
 	}
+}
+
+void *ptr_align_up(void* ptr) {
+	uintptr_t p = (uintptr_t)ptr;
+	return (void*)((p + ALIGN_SIZE - 1) & ~(ALIGN_SIZE - 1));
+}
+
+void *ptr_align_down(void* ptr) {
+	uintptr_t p = (uintptr_t)ptr;
+	return (void*)(p & ~(ALIGN_SIZE - 1));
 }
 
 int sm_ipt_os_init_shmem(struct sm_ipt_os_ctx *os_ctx,
@@ -159,50 +181,66 @@ int sm_ipt_os_init_shmem(struct sm_ipt_os_ctx *os_ctx,
 	struct ipc_events* ipc_events;
 	struct sm_ipt_linux_param* param = (struct sm_ipt_linux_param*)os_specific_param;
 	memset(os_ctx, 0, sizeof(struct sm_ipt_os_ctx));
-	static uint8_t *shared_memory;
 
 	SM_IPT_INF("Shared memory name: %s", param->shmem_name);
-	SM_IPT_INF("Input size: %d", param->input_size);
-	SM_IPT_INF("Output size: %d", param->output_size);
+	SM_IPT_INF("Host input size: %d", param->host_input_size);
+	SM_IPT_INF("Host output size: %d", param->host_output_size);
 
 	os_ctx->signal_handler = NULL;
-	conf->input_size = param->input_size;
-	conf->output_size = param->output_size;
-	uint32_t input_size = (param->input_size + 7) & ~7;
-	uint32_t output_size = (param->output_size + 7) & ~7;
-	uint32_t total_size = input_size + output_size + sizeof(struct ipc_events);
+	os_ctx->is_host = param->is_host;
+	uint32_t total_size = param->host_input_size + param->host_input_size + sizeof(struct ipc_events) + 3 * ALIGN_SIZE;
 
 	if (param->is_host) {
+		conf->input_size = param->host_input_size;
+		conf->output_size = param->host_output_size;
 		fd = shm_open(param->shmem_name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 	} else {
+		conf->input_size = param->host_output_size;
+		conf->output_size = param->host_input_size;
 		fd = shm_open(param->shmem_name, O_RDWR, S_IRUSR | S_IWUSR);
 	}
 	SM_IPT_DBG("fd=%d", fd);
 	ftruncate(fd, total_size);
-	shared_memory = (uint8_t*)mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	os_ctx->shared_memory = (uint8_t*)mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	close(fd);
-	ipc_events = (struct ipc_events*)&shared_memory[input_size + output_size];
-	conf->input = &shared_memory[param->is_host ? 0 : output_size];
-	conf->output = &shared_memory[param->is_host ? input_size : 0];
+	if (CONFIG_SM_IPT_CACHE_LINE_BYTES > 0) {
+		os_ctx->cache_memory = malloc(total_size);
+	} else {
+		os_ctx->cache_memory = os_ctx->shared_memory;
+	}
+	ipc_events = (struct ipc_events*)&os_ctx->shared_memory[0];
+	uint8_t *hs_in = ptr_align_up((uint8_t *)os_ctx->shared_memory + sizeof(struct ipc_events));
+	uint8_t *hs_out = hs_in + 8;
+	conf->input = ptr_align_up((uint8_t *)os_ctx->cache_memory + sizeof(struct ipc_events));
+	conf->output = ptr_align_up((uint8_t *)conf->input + param->host_input_size);
 	os_ctx->ipc_in = param->is_host ? &ipc_events->sem_in : &ipc_events->sem_out;
 	os_ctx->ipc_out = param->is_host ? &ipc_events->sem_out : &ipc_events->sem_in;
-	SM_IPT_DBG("shmem=0x%08X %d", (int)(intptr_t)shared_memory, total_size);
+	if (!param->is_host) {
+		void *tmp = conf->input;
+		conf->input = conf->output;
+		conf->output = tmp;
+		tmp = hs_in;
+		hs_in = hs_out;
+		hs_out = tmp;
+	}
+	SM_IPT_DBG("shmem=0x%08X %d", (int)(intptr_t)os_ctx->shared_memory, total_size);
+	SM_IPT_DBG("cache=0x%08X %d", (int)(intptr_t)os_ctx->cache_memory, total_size);
 	SM_IPT_DBG("input=0x%08X %d", (int)(intptr_t)conf->input, conf->input_size);
 	SM_IPT_DBG("output=0x%08X %d", (int)(intptr_t)conf->output, conf->output_size);
 	SM_IPT_DBG("ipc=0x%08X 0x%08X", (int)(intptr_t)os_ctx->ipc_in, (int)(intptr_t)os_ctx->ipc_out);
 	SM_IPT_DBG("synchronizing 1 of 3");
-	set_and_wait(conf->input, conf->output, 0xDE, 0xAD);
-	set_and_wait(conf->input, conf->output, 0xAD, 0xBE);
-	set_and_wait(conf->input, conf->output, 0xBE, 0xAF);
+	set_and_wait(hs_in, hs_out, 0xDE, 0xAD);
+	set_and_wait(hs_in, hs_out, 0xAD, 0xBE);
+	set_and_wait(hs_in, hs_out, 0xBE, 0xAF);
 	if (param->is_host) {
 		SM_IPT_DBG("sem_init");
 		sem_init(os_ctx->ipc_in, 1, 0);
 		sem_init(os_ctx->ipc_out, 1, 0);
 	}
 	SM_IPT_DBG("synchronizing 2 of 3");
-	set_and_wait(conf->input, conf->output, 0xAF, 0xCA);
-	set_and_wait(conf->input, conf->output, 0xCA, 0xFE);
-	set_and_wait(conf->input, conf->output, 0xFE, 0xFE);
+	set_and_wait(hs_in, hs_out, 0xAF, 0xCA);
+	set_and_wait(hs_in, hs_out, 0xCA, 0xFE);
+	set_and_wait(hs_in, hs_out, 0xFE, 0xFE);
 
 	SM_IPT_DBG("synchronizing 3 of 3");
 	sem_post(os_ctx->ipc_out);
@@ -225,6 +263,27 @@ int sm_ipt_os_init_signals(struct sm_ipt_os_ctx *os_ctx,
 
 void sm_ipt_os_signal(struct sm_ipt_os_ctx *os_ctx)
 {
-	SM_IPT_OS_MEMORY_BARRIER();
 	sem_post(os_ctx->ipc_out);
+}
+
+
+void sm_ipt_os_cache_wb(struct sm_ipt_os_ctx *os_ctx, void *ptr, size_t size)
+{
+	uint8_t *cache = os_ctx->cache_memory;
+	uint8_t *main = os_ctx->shared_memory;
+	uint8_t *begin_line = ptr_align_down(ptr);
+	uint8_t *end_line = (uint8_t *)ptr_align_down((uint8_t *)ptr + size - 1) + ALIGN_SIZE;
+	__sync_synchronize();
+	memcpy(main + (begin_line - cache), begin_line, end_line - begin_line);
+}
+
+
+void sm_ipt_os_cache_inv(struct sm_ipt_os_ctx *os_ctx, void *ptr, size_t size)
+{
+	uint8_t *cache = os_ctx->cache_memory;
+	uint8_t *main = os_ctx->shared_memory;
+	uint8_t *begin_line = ptr_align_down(ptr);
+	uint8_t *end_line = (uint8_t *)ptr_align_down((uint8_t *)ptr + size - 1) + ALIGN_SIZE;
+	memcpy(begin_line, main + (begin_line - cache), end_line - begin_line);
+	__sync_synchronize();
 }

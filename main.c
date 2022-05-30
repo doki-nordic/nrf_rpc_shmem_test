@@ -42,23 +42,21 @@ int main() {
 	}
 
 	param.is_host = IS_MASTER;
-	param.input_size = 65536;
-	param.output_size = 65536 / 2;
-
-	if (!IS_MASTER) {
-		uint32_t t = param.input_size;
-		param.input_size = param.output_size;
-		param.output_size = t;
-	}
+	param.host_input_size = 65536;
+	param.host_output_size = 65536 / 2;
 
 	err = sm_ipt_init(&ctx, handler, &param);
 	SM_IPT_DBG("sm_ipt_init: %d", err);
 
 	uint8_t* buf;
 	sm_ipt_alloc_tx_buf(&ctx, &buf, 2048);
-	sm_ipt_send(&ctx, buf, 2000);
+	buf[0] = 0x11;
+	buf[1] = 0x22;
+	buf[2] = 0x33;
+	buf[3] = 0x44;
+	sm_ipt_send(&ctx, buf, 4);
 
-	sleep(10);
+	sleep(5);
 
 	return 0;
 }

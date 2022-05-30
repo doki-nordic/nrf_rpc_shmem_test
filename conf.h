@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #define CONFIG_SM_IPT_NUM_BLOCKS_64 1
+#define CONFIG_SM_IPT_CACHE_LINE_BYTES 32
 
 #ifdef MASTER
 

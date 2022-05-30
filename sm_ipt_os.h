@@ -56,26 +56,36 @@ struct sm_ipt_os_shmem_conf {
 };
 
 struct sm_ipt_linux_param {
-	uint32_t output_size;
-	uint32_t input_size;
+	uint32_t host_output_size;
+	uint32_t host_input_size;
 	const char* shmem_name;
 	bool is_host;
 };
 
-struct sm_ipt_os_ctx{
+struct sm_ipt_os_ctx {
+	bool is_host;
 	void (*signal_handler)(struct sm_ipt_os_ctx *);
 	sem_t *ipc_in;
 	sem_t *ipc_out;
+	uint8_t *shared_memory;
+	uint8_t *cache_memory;
 };
 
 #define SM_IPT_ASSERT(_expr) assert((_expr))
 
-#define SM_IPT_OS_MEMORY_BARRIER() __sync_synchronize()
-
-#define SM_IPT_OS_CACHE_WB(ptr) __sync_synchronize()
-#define SM_IPT_OS_CACHE_INV(ptr) __sync_synchronize()
-#define SM_IPT_OS_CACHE_WB_SIZE(ptr, size) __sync_synchronize()
-#define SM_IPT_OS_CACHE_INV_SIZE(ptr, size) __sync_synchronize()
+#if CONFIG_SM_IPT_CACHE_LINE_BYTES > 0
+void sm_ipt_os_cache_wb(struct sm_ipt_os_ctx *os_ctx, void *ptr, size_t size);
+void sm_ipt_os_cache_inv(struct sm_ipt_os_ctx *os_ctx, void *ptr, size_t size);
+#define SM_IPT_OS_CACHE_WB(os_ctx, data) sm_ipt_os_cache_wb((os_ctx), &(data), sizeof(data))
+#define SM_IPT_OS_CACHE_INV(os_ctx, data) sm_ipt_os_cache_inv((os_ctx), &(data), sizeof(data))
+#define SM_IPT_OS_CACHE_WB_SIZE(os_ctx, ptr, size) sm_ipt_os_cache_wb((os_ctx), (ptr), (size))
+#define SM_IPT_OS_CACHE_INV_SIZE(os_ctx, ptr, size) sm_ipt_os_cache_inv((os_ctx), (ptr), (size))
+#else
+#define SM_IPT_OS_CACHE_WB(os_ctx, ptr) __sync_synchronize(); (void)(ptr); (void)(os_ctx)
+#define SM_IPT_OS_CACHE_INV(os_ctx, ptr) __sync_synchronize(); (void)(ptr); (void)(os_ctx)
+#define SM_IPT_OS_CACHE_WB_SIZE(os_ctx, ptr, size) __sync_synchronize(); (void)(ptr); (void)(size); (void)(os_ctx)
+#define SM_IPT_OS_CACHE_INV_SIZE(os_ctx, ptr, size) __sync_synchronize(); (void)(ptr); (void)(size); (void)(os_ctx)
+#endif
 
 #define SM_IPT_OS_GET_CONTAINTER(ptr, type, field) ((type *)(((char *)(ptr)) - offsetof(type, field)))
 
